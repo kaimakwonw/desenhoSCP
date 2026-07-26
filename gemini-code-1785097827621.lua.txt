@@ -12,6 +12,9 @@ local Workspace = game:GetService("Workspace")
 local Lighting = game:GetService("Lighting")
 
 local LocalPlayer = Players.LocalPlayer
+-- BUG FIX #1: Proteção contra LocalPlayer nil
+if not LocalPlayer then error("LocalPlayer não encontrado!") return end
+
 local Camera = Workspace.CurrentCamera
 local Mouse = LocalPlayer:GetMouse()
 
@@ -74,7 +77,14 @@ elseif syn and syn.protect_gui then
     syn.protect_gui(KaiDevGui)
     KaiDevGui.Parent = CoreGui
 else
-    KaiDevGui.Parent = CoreGui or LocalPlayer:WaitForChild("PlayerGui")
+    -- BUG FIX #2: Proteção contra WaitForChild infinito
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not playerGui then
+        playerGui = Instance.new("Folder")
+        playerGui.Name = "PlayerGui"
+        playerGui.Parent = LocalPlayer
+    end
+    KaiDevGui.Parent = playerGui
 end
 
 ------------------------------------------------------------------------
@@ -539,7 +549,11 @@ local function AddSlider(parentTab, titleText, min, max, defaultValue, callback)
 
     local sliding = false
     local function UpdateSlider(input)
-        local pos = math.clamp((input.Position.X - barBg.AbsolutePosition.X) / barBg.AbsoluteSize.X, 0, 1)
+        -- BUG FIX #3: Proteção contra divisão por zero
+        local barSize = barBg.AbsoluteSize.X
+        if barSize <= 0 then return end
+        
+        local pos = math.clamp((input.Position.X - barBg.AbsolutePosition.X) / barSize, 0, 1)
         local val = math.floor(min + (max - min) * pos)
         fill.Size = UDim2.new(pos, 0, 1, 0)
         valLabel.Text = tostring(val)
@@ -739,14 +753,17 @@ KeyBtn.MouseButton1Click:Connect(function()
     KeyBtn.TextColor3 = Color3.fromRGB(255, 200, 50)
 end)
 
+-- BUG FIX #4 & #5: Proteção contra input nil e KeyCode nil
 UserInputService.InputBegan:Connect(function(input, gpe)
+    if not input then return end
+    
     if isBindingKey and input.UserInputType == Enum.UserInputType.Keyboard then
         Config.ToggleKey = input.KeyCode
         KeyBtn.Text = input.KeyCode.Name
         KeyBtn.TextColor3 = C_PURPLE
         isBindingKey = false
         AddLog("Atalho alterado para: " .. input.KeyCode.Name)
-    elseif not gpe and not isBindingKey and input.KeyCode == Config.ToggleKey then
+    elseif not gpe and not isBindingKey and input.KeyCode and input.KeyCode == Config.ToggleKey then
         MainFrame.Visible = not MainFrame.Visible
     end
 end)
@@ -965,7 +982,6 @@ RunService.RenderStepped:Connect(function()
                         end
 
                         if Config.ESPDistance then
-                            -- CORRIGIDO: Linha 951 - Cálculo de distância completo e seguro
                             local playerChar = LocalPlayer.Character
                             local playerHrp = playerChar and playerChar:FindFirstChild("HumanoidRootPart")
                             local dist = playerHrp and math.floor((playerHrp.Position - hrp.Position).Magnitude) or 0
