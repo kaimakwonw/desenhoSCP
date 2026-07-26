@@ -1,5 +1,5 @@
 --====================================================================--
---                        KAIDEV // FULL SUITE                        --
+--                        KAIDEV // FULL SUITE v3 OTIMIZADO          --
 --               Design: Obsidian Black & Neon Purple                 --
 --====================================================================--
 
@@ -12,11 +12,10 @@ local Workspace = game:GetService("Workspace")
 local Lighting = game:GetService("Lighting")
 
 local LocalPlayer = Players.LocalPlayer
--- BUG FIX #1: Proteção contra LocalPlayer nil
 if not LocalPlayer then error("LocalPlayer não encontrado!") return end
 
 local Camera = Workspace.CurrentCamera
-local Mouse = LocalPlayer:GetMouse()
+local Mouse = pcall(function() return LocalPlayer:GetMouse() end) and LocalPlayer:GetMouse() or nil
 
 ------------------------------------------------------------------------
 -- CONFIGURAÇÕES GERAIS DO SCRIPT
@@ -52,9 +51,32 @@ local Config = {
     ToggleKey = Enum.KeyCode.RightShift
 }
 
+-- Cache de conexões para limpeza
+local ActiveConnections = {}
+local ActiveTweens = {}
 local alvoAtual = nil
 local originalSizes = {}
 local isBindingKey = false
+
+-- Função para registrar conexões para cleanup
+local function RegisterConnection(connection)
+    table.insert(ActiveConnections, connection)
+    return connection
+end
+
+-- Função para registrar tweens para limpeza
+local function RegisterTween(tween)
+    table.insert(ActiveTweens, tween)
+    return tween
+end
+
+-- Limpeza de conexões
+local function CleanupConnections()
+    for _, conn in ipairs(ActiveConnections) do
+        if conn then pcall(function() conn:Disconnect() end) end
+    end
+    ActiveConnections = {}
+end
 
 ------------------------------------------------------------------------
 -- EFEITO DE DESFOQUE (BLUR) NO FUNDO DURANTE O CARREGAMENTO
@@ -77,7 +99,6 @@ elseif syn and syn.protect_gui then
     syn.protect_gui(KaiDevGui)
     KaiDevGui.Parent = CoreGui
 else
-    -- BUG FIX #2: Proteção contra WaitForChild infinito
     local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
     if not playerGui then
         playerGui = Instance.new("Folder")
@@ -171,19 +192,27 @@ local FillCorner = Instance.new("UICorner")
 FillCorner.CornerRadius = UDim.new(1, 0)
 FillCorner.Parent = BarFill
 
--- ANIMAÇÃO DE CARREGAMENTO
+-- ANIMAÇÃO DE CARREGAMENTO OTIMIZADA
 local function AnimateLoadingBar()
     for i = 0, 100, 5 do
-        LoadPercent.Text = i .. "%"
-        BarFill.Size = UDim2.new(i / 100, 0, 1, 0)
-        wait(0.05)
+        if LoadingFrame.Parent then
+            LoadPercent.Text = i .. "%"
+            BarFill.Size = UDim2.new(i / 100, 0, 1, 0)
+            task.wait(0.05)
+        end
     end
-    LoadPercent.Text = "100%"
-    BarFill.Size = UDim2.new(1, 0, 1, 0)
-    wait(0.5)
-    TweenService:Create(LoadingFrame, TweenInfo.new(0.3), {GroupTransparency = 1}):Play()
-    wait(0.3)
-    LoadingFrame.Visible = false
+    
+    if LoadingFrame.Parent then
+        LoadPercent.Text = "100%"
+        BarFill.Size = UDim2.new(1, 0, 1, 0)
+        task.wait(0.5)
+        
+        local tween = RegisterTween(TweenService:Create(LoadingFrame, TweenInfo.new(0.3), {GroupTransparency = 1}))
+        tween:Play()
+        tween.Completed:Connect(function()
+            LoadingFrame.Visible = false
+        end)
+    end
 end
 
 task.spawn(AnimateLoadingBar)
@@ -268,43 +297,49 @@ CloseCorner.CornerRadius = UDim.new(0, 6)
 CloseCorner.Parent = BtnClose
 
 ------------------------------------------------------------------------
--- LÓGICA DE JANELA ARRASTÁVEL (DRAG SYSTEM)
+-- LÓGICA DE JANELA ARRASTÁVEL (DRAG SYSTEM) OTIMIZADA
 ------------------------------------------------------------------------
-local dragging, dragInput, dragStart, startPos
+local dragging = false
+local dragInput = nil
+local dragStart = nil
+local startPos = nil
 
 local function UpdateDrag(input)
+    if not dragging or not dragStart or not startPos then return end
     local delta = input.Position - dragStart
     MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
 end
 
-Header.InputBegan:Connect(function(input)
+RegisterConnection(Header.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true
         dragStart = input.Position
         startPos = MainFrame.Position
-        
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
-            end
-        end)
     end
-end)
+end))
 
-Header.InputChanged:Connect(function(input)
+RegisterConnection(Header.InputChanged:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
         dragInput = input
     end
-end)
+end))
 
-UserInputService.InputChanged:Connect(function(input)
+RegisterConnection(UserInputService.InputChanged:Connect(function(input)
     if input == dragInput and dragging then
         UpdateDrag(input)
     end
-end)
+end))
+
+RegisterConnection(UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+        dragInput = nil
+        dragStart = nil
+    end
+end))
 
 ------------------------------------------------------------------------
--- NAVEGAÇÃO POR ABAS
+-- NAVEGAÇÃO POR ABAS OTIMIZADA
 ------------------------------------------------------------------------
 local Sidebar = Instance.new("Frame")
 Sidebar.Name = "Sidebar"
@@ -322,6 +357,7 @@ TabContainer.Parent = MainFrame
 
 local Tabs = {}
 local TabButtons = {}
+local CurrentTab = nil
 local tabCount = 0
 
 local function CreateTab(name, iconAssetId)
@@ -375,24 +411,30 @@ local function CreateTab(name, iconAssetId)
     Tabs[name] = contentFrame
     TabButtons[name] = {Btn = btn, Icon = icon, Text = btnText}
 
-    btn.MouseButton1Click:Connect(function()
-        for tabName, data in pairs(TabButtons) do
-            local isCurrent = (tabName == name)
-            Tabs[tabName].Visible = isCurrent
-            
-            TweenService:Create(data.Btn, TweenInfo.new(0.2), {
-                BackgroundColor3 = isCurrent and C_CARD or C_BG
-            }):Play()
-            
-            TweenService:Create(data.Text, TweenInfo.new(0.2), {
-                TextColor3 = isCurrent and C_PURPLE or C_TEXT_DIM
-            }):Play()
-            
-            TweenService:Create(data.Icon, TweenInfo.new(0.2), {
-                ImageColor3 = isCurrent and C_PURPLE or C_TEXT_DIM
-            }):Play()
+    if tabIndex == 1 then
+        CurrentTab = name
+    end
+
+    RegisterConnection(btn.MouseButton1Click:Connect(function()
+        if CurrentTab == name then return end
+        
+        -- Desativar tab anterior
+        if CurrentTab and TabButtons[CurrentTab] then
+            local prevData = TabButtons[CurrentTab]
+            Tabs[CurrentTab].Visible = false
+            RegisterTween(TweenService:Create(prevData.Btn, TweenInfo.new(0.2), {BackgroundColor3 = C_BG})):Play()
+            RegisterTween(TweenService:Create(prevData.Text, TweenInfo.new(0.2), {TextColor3 = C_TEXT_DIM})):Play()
+            RegisterTween(TweenService:Create(prevData.Icon, TweenInfo.new(0.2), {ImageColor3 = C_TEXT_DIM})):Play()
         end
-    end)
+        
+        -- Ativar nova tab
+        CurrentTab = name
+        Tabs[name].Visible = true
+        local data = TabButtons[name]
+        RegisterTween(TweenService:Create(data.Btn, TweenInfo.new(0.2), {BackgroundColor3 = C_CARD})):Play()
+        RegisterTween(TweenService:Create(data.Text, TweenInfo.new(0.2), {TextColor3 = C_PURPLE})):Play()
+        RegisterTween(TweenService:Create(data.Icon, TweenInfo.new(0.2), {ImageColor3 = C_PURPLE})):Play()
+    end))
 
     return contentFrame
 end
@@ -405,7 +447,7 @@ local TabConfig = CreateTab("Configurações", "rbxassetid://6031280882")
 local TabConsole = CreateTab("Console", "rbxassetid://6034043431")
 
 ------------------------------------------------------------------------
--- LOGS DO CONSOLE
+-- LOGS DO CONSOLE OTIMIZADO
 ------------------------------------------------------------------------
 local ConsoleLogFrame = Instance.new("ScrollingFrame")
 ConsoleLogFrame.Size = UDim2.new(1, 0, 1, 0)
@@ -418,11 +460,21 @@ ConsoleLayout.SortOrder = Enum.SortOrder.LayoutOrder
 ConsoleLayout.Padding = UDim.new(0, 4)
 ConsoleLayout.Parent = ConsoleLogFrame
 
+local ConsoleLogCount = 0
 local function AddLog(msg)
+    ConsoleLogCount = ConsoleLogCount + 1
+    
+    -- Limita logs na memória (max 100 logs)
+    if ConsoleLogCount > 100 then
+        local child = ConsoleLogFrame:FindFirstChildOfClass("TextLabel")
+        if child then child:Destroy() end
+        ConsoleLogCount = 100
+    end
+    
     local logText = Instance.new("TextLabel")
     logText.Size = UDim2.new(1, 0, 0, 18)
     logText.BackgroundTransparency = 1
-    logText.Text = "> [" .. os.date("%X") .. "] " .. msg
+    logText.Text = "> [" .. os.date("%X") .. "] " .. tostring(msg)
     logText.Font = Enum.Font.Code
     logText.TextSize = 12
     logText.TextColor3 = C_PURPLE
@@ -433,7 +485,7 @@ local function AddLog(msg)
 end
 
 ------------------------------------------------------------------------
--- CONSTRUTORES DE ELEMENTOS INTERATIVOS DA UI
+-- CONSTRUTORES DE ELEMENTOS INTERATIVOS DA UI OTIMIZADOS
 ------------------------------------------------------------------------
 local function AddToggle(parentTab, titleText, defaultValue, callback)
     local card = Instance.new("Frame")
@@ -478,19 +530,19 @@ local function AddToggle(parentTab, titleText, defaultValue, callback)
     circleCorner.Parent = circle
 
     local state = defaultValue
-    switchBg.MouseButton1Click:Connect(function()
+    RegisterConnection(switchBg.MouseButton1Click:Connect(function()
         state = not state
         callback(state)
         AddLog(titleText .. " -> " .. tostring(state))
         
         if state then
-            TweenService:Create(circle, TweenInfo.new(0.2), {Position = UDim2.new(1, -19, 0.5, -8), BackgroundColor3 = Color3.fromRGB(255, 255, 255)}):Play()
-            TweenService:Create(switchBg, TweenInfo.new(0.2), {BackgroundColor3 = C_PURPLE}):Play()
+            RegisterTween(TweenService:Create(circle, TweenInfo.new(0.2), {Position = UDim2.new(1, -19, 0.5, -8), BackgroundColor3 = Color3.fromRGB(255, 255, 255)})):Play()
+            RegisterTween(TweenService:Create(switchBg, TweenInfo.new(0.2), {BackgroundColor3 = C_PURPLE})):Play()
         else
-            TweenService:Create(circle, TweenInfo.new(0.2), {Position = UDim2.new(0, 3, 0.5, -8), BackgroundColor3 = C_TEXT_DIM}):Play()
-            TweenService:Create(switchBg, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(40, 40, 55)}):Play()
+            RegisterTween(TweenService:Create(circle, TweenInfo.new(0.2), {Position = UDim2.new(0, 3, 0.5, -8), BackgroundColor3 = C_TEXT_DIM})):Play()
+            RegisterTween(TweenService:Create(switchBg, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(40, 40, 55)})):Play()
         end
-    end)
+    end))
 end
 
 local function AddSlider(parentTab, titleText, min, max, defaultValue, callback)
@@ -548,8 +600,11 @@ local function AddSlider(parentTab, titleText, min, max, defaultValue, callback)
     fillCorner.Parent = fill
 
     local sliding = false
+    local sliderConnection = nil
+    
     local function UpdateSlider(input)
-        -- BUG FIX #3: Proteção contra divisão por zero
+        if not input or not barBg.Parent then return end
+        
         local barSize = barBg.AbsoluteSize.X
         if barSize <= 0 then return end
         
@@ -560,27 +615,29 @@ local function AddSlider(parentTab, titleText, min, max, defaultValue, callback)
         callback(val)
     end
 
-    barBg.InputBegan:Connect(function(input)
+    RegisterConnection(barBg.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             sliding = true
             UpdateSlider(input)
         end
-    end)
+    end))
 
-    UserInputService.InputEnded:Connect(function(input)
+    sliderConnection = RegisterConnection(UserInputService.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             sliding = false
         end
-    end)
+    end))
 
-    UserInputService.InputChanged:Connect(function(input)
+    RegisterConnection(UserInputService.InputChanged:Connect(function(input)
         if sliding and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
             UpdateSlider(input)
         end
-    end)
+    end))
 end
 
 local function AddDropdown(parentTab, titleText, options, defaultValue, callback)
+    if not options or #options == 0 then return end
+    
     local card = Instance.new("Frame")
     card.Size = UDim2.new(1, 0, 0, 42)
     card.BackgroundColor3 = C_CARD
@@ -623,13 +680,13 @@ local function AddDropdown(parentTab, titleText, options, defaultValue, callback
         end
     end
 
-    btnSelect.MouseButton1Click:Connect(function()
+    RegisterConnection(btnSelect.MouseButton1Click:Connect(function()
         currentIndex = (currentIndex % #options) + 1
         local selected = options[currentIndex]
         btnSelect.Text = selected
         callback(selected)
         AddLog(titleText .. " -> " .. selected)
-    end)
+    end))
 end
 
 local function AddColorPicker(parentTab, titleText, defaultColor, callback)
@@ -674,13 +731,13 @@ local function AddColorPicker(parentTab, titleText, defaultColor, callback)
     }
     local pIndex = 1
 
-    previewBtn.MouseButton1Click:Connect(function()
+    RegisterConnection(previewBtn.MouseButton1Click:Connect(function()
         pIndex = (pIndex % #palette) + 1
         local newColor = palette[pIndex]
         previewBtn.BackgroundColor3 = newColor
         callback(newColor)
         AddLog(titleText .. " -> Alterado")
-    end)
+    end))
 end
 
 ------------------------------------------------------------------------
@@ -747,14 +804,13 @@ local KeyBtnCorner = Instance.new("UICorner")
 KeyBtnCorner.CornerRadius = UDim.new(0, 6)
 KeyBtnCorner.Parent = KeyBtn
 
-KeyBtn.MouseButton1Click:Connect(function()
+RegisterConnection(KeyBtn.MouseButton1Click:Connect(function()
     isBindingKey = true
     KeyBtn.Text = "Pressione..."
     KeyBtn.TextColor3 = Color3.fromRGB(255, 200, 50)
-end)
+end))
 
--- BUG FIX #4 & #5: Proteção contra input nil e KeyCode nil
-UserInputService.InputBegan:Connect(function(input, gpe)
+RegisterConnection(UserInputService.InputBegan:Connect(function(input, gpe)
     if not input then return end
     
     if isBindingKey and input.UserInputType == Enum.UserInputType.Keyboard then
@@ -766,29 +822,29 @@ UserInputService.InputBegan:Connect(function(input, gpe)
     elseif not gpe and not isBindingKey and input.KeyCode and input.KeyCode == Config.ToggleKey then
         MainFrame.Visible = not MainFrame.Visible
     end
-end)
+end))
 
-BtnClose.MouseButton1Click:Connect(function()
+RegisterConnection(BtnClose.MouseButton1Click:Connect(function()
     MainFrame.Visible = false
     AddLog("Painel ocultado pelo botão Fechar.")
-end)
+end))
 
 local isMinimized = false
-BtnMinimize.MouseButton1Click:Connect(function()
+RegisterConnection(BtnMinimize.MouseButton1Click:Connect(function()
     isMinimized = not isMinimized
     if isMinimized then
-        TweenService:Create(MainFrame, TweenInfo.new(0.3), {Size = UDim2.fromOffset(660, 42)}):Play()
+        RegisterTween(TweenService:Create(MainFrame, TweenInfo.new(0.3), {Size = UDim2.fromOffset(660, 42)})):Play()
         Sidebar.Visible = false
         TabContainer.Visible = false
     else
         Sidebar.Visible = true
         TabContainer.Visible = true
-        TweenService:Create(MainFrame, TweenInfo.new(0.3), {Size = UDim2.fromOffset(660, 480)}):Play()
+        RegisterTween(TweenService:Create(MainFrame, TweenInfo.new(0.3), {Size = UDim2.fromOffset(660, 480)})):Play()
     end
-end)
+end))
 
 ------------------------------------------------------------------------
--- BACKEND LOGIC: SILENT AIM, HITBOX & DRAWING ESP
+-- BACKEND LOGIC: SILENT AIM, HITBOX & DRAWING ESP OTIMIZADO
 ------------------------------------------------------------------------
 local FOVCircle = Drawing.new("Circle")
 FOVCircle.Color = Color3.fromRGB(255, 255, 255)
@@ -798,12 +854,19 @@ FOVCircle.Transparency = 0.7
 
 local function ValidarEquipeAlvo(player)
     if not player or player == LocalPlayer then return false end
-    if Config.TeamCheck and player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team then
+    
+    local playerTeam = player.Team
+    local localTeam = LocalPlayer.Team
+    
+    if Config.TeamCheck and playerTeam and localTeam and playerTeam == localTeam then
         return false
     end
 
-    if player.Team then
-        local nomeTime = string.lower(player.Team.Name)
+    if playerTeam then
+        local teamName = playerTeam.Name
+        if not teamName then return true end
+        
+        local nomeTime = string.lower(teamName)
         if string.find(nomeTime, "police") or string.find(nomeTime, "cop") or string.find(nomeTime, "guard") then
             return Config.TargetPolice
         elseif string.find(nomeTime, "inmate") or string.find(nomeTime, "prisoner") then
@@ -816,6 +879,8 @@ local function ValidarEquipeAlvo(player)
 end
 
 local ESPCache = {}
+local LastPlayerList = {}
+local LastPlayerListTime = 0
 
 local function CriarObjetosESP(player)
     if ESPCache[player] then return end
@@ -853,22 +918,26 @@ local function CriarObjetosESP(player)
         Name = textName,
         Distance = textDist,
         HealthBg = healthOutline,
-        HealthFg = healthFill
+        HealthFg = healthFill,
+        Visible = true
     }
 end
 
 local function RemoverESP(player)
     if ESPCache[player] then
-        for _, obj in pairs(ESPCache[player]) do
-            if obj.Remove then
-                obj:Remove()
-            end
-        end
+        local esp = ESPCache[player]
+        pcall(function() esp.Box:Remove() end)
+        pcall(function() esp.Name:Remove() end)
+        pcall(function() esp.Distance:Remove() end)
+        pcall(function() esp.HealthBg:Remove() end)
+        pcall(function() esp.HealthFg:Remove() end)
         ESPCache[player] = nil
     end
 end
 
-Players.PlayerRemoving:Connect(RemoverESP)
+RegisterConnection(Players.PlayerRemoving:Connect(function(player)
+    RemoverESP(player)
+end))
 
 local function ObterAlvoMaisProximo()
     local alvo = nil
@@ -895,127 +964,138 @@ local function ObterAlvoMaisProximo()
     return alvo
 end
 
-RunService.RenderStepped:Connect(function()
+-- Cache otimizado para RenderStepped
+local renderConnection = nil
+local LastHealthValues = {}
+
+local function UpdateESP()
     FOVCircle.Position = UserInputService:GetMouseLocation()
     FOVCircle.Radius = Config.FOVRadius
     FOVCircle.Visible = Config.ShowFOV and Config.SilentAim
 
     alvoAtual = Config.SilentAim and ObterAlvoMaisProximo() or nil
 
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then
-            CriarObjetosESP(p)
-            local esp = ESPCache[p]
-            local char = p.Character
-            local eval = ValidarEquipeAlvo(p)
+    local currentTime = tick()
+    if currentTime - LastPlayerListTime > 1 then
+        LastPlayerList = Players:GetPlayers()
+        LastPlayerListTime = currentTime
+    end
 
-            if char and eval then
-                local hum = char:FindFirstChildOfClass("Humanoid")
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                local head = char:FindFirstChild("Head")
+    for _, p in ipairs(LastPlayerList) do
+        if p == LocalPlayer then continue end
+        
+        if not p.Parent then
+            RemoverESP(p)
+            continue
+        end
+        
+        CriarObjetosESP(p)
+        local esp = ESPCache[p]
+        if not esp then continue end
+        
+        local char = p.Character
+        local eval = ValidarEquipeAlvo(p)
 
-                if hrp then
-                    if Config.HitboxEnabled and hum and hum.Health > 0 then
-                        if not originalSizes[hrp] then originalSizes[hrp] = hrp.Size end
-                        hrp.Size = Vector3.new(Config.HitboxSize, Config.HitboxSize, Config.HitboxSize)
-                        hrp.Transparency = Config.HitboxTransparency
-                        hrp.Color = Config.HitboxColor
-                        hrp.Material = Enum.Material.ForceField
-                        hrp.CanCollide = false
-                        hrp.Shape = (Config.HitboxShape == "Ball" and Enum.PartType.Ball or Enum.PartType.Block)
-                    elseif originalSizes[hrp] then
-                        hrp.Size = originalSizes[hrp]
-                        hrp.Transparency = 1
-                    end
+        if char and eval then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            local head = char:FindFirstChild("Head")
+
+            if hrp and hum and hum.Health > 0 then
+                if Config.HitboxEnabled then
+                    if not originalSizes[hrp] then originalSizes[hrp] = hrp.Size end
+                    hrp.Size = Vector3.new(Config.HitboxSize, Config.HitboxSize, Config.HitboxSize)
+                    hrp.Transparency = Config.HitboxTransparency
+                    hrp.Color = Config.HitboxColor
+                    hrp.Material = Enum.Material.ForceField
+                    hrp.CanCollide = false
+                    hrp.Shape = (Config.HitboxShape == "Ball" and Enum.PartType.Ball or Enum.PartType.Block)
+                elseif originalSizes[hrp] then
+                    hrp.Size = originalSizes[hrp]
+                    hrp.Transparency = 1
                 end
+            end
 
-                local hl = char:FindFirstChild("ESPHighlightSmooth")
-                if Config.ESPHighlight and hum and hum.Health > 0 then
-                    if not hl then
-                        hl = Instance.new("Highlight")
-                        hl.Name = "ESPHighlightSmooth"
-                        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                        hl.Parent = char
-                    end
+            local hl = char:FindFirstChild("ESPHighlightSmooth")
+            if Config.ESPHighlight and hum and hum.Health > 0 then
+                if not hl then
+                    hl = Instance.new("Highlight")
+                    hl.Name = "ESPHighlightSmooth"
+                    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    hl.Parent = char
+                end
+                local teamColor = p.TeamColor and p.TeamColor.Color or Color3.fromRGB(255, 255, 255)
+                hl.FillColor = teamColor
+                hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                hl.FillTransparency = math.clamp(0.70 + Config.ESPTransparency, 0, 1)
+                hl.OutlineTransparency = math.clamp(0.3 + Config.ESPTransparency, 0, 1)
+                hl.Enabled = true
+            elseif hl then
+                hl.Enabled = false
+            end
+
+            if hrp and head and hum and hum.Health > 0 then
+                local hrpPos, vis = Camera:WorldToViewportPoint(hrp.Position)
+                if vis then
+                    local headPos = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+                    local legPos = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0))
+
+                    local height = math.abs(headPos.Y - legPos.Y)
+                    local width = height / 1.8
                     local teamColor = p.TeamColor and p.TeamColor.Color or Color3.fromRGB(255, 255, 255)
-                    hl.FillColor = teamColor
-                    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
-                    hl.FillTransparency = math.clamp(0.70 + Config.ESPTransparency, 0, 1)
-                    hl.OutlineTransparency = math.clamp(0.3 + Config.ESPTransparency, 0, 1)
-                    hl.Enabled = true
-                elseif hl then
-                    hl.Enabled = false
-                end
 
-                if hrp and head and hum and hum.Health > 0 then
-                    local hrpPos, vis = Camera:WorldToViewportPoint(hrp.Position)
-                    if vis then
-                        local headPos = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
-                        local legPos = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0))
+                    local corBox = Config.UseTeamColors and teamColor or Config.ESPBoxColor
+                    local corTexto = Config.UseTeamColors and teamColor or Config.ESPTextColor
+                    local trans = 1 - Config.ESPTransparency
 
-                        local height = math.abs(headPos.Y - legPos.Y)
-                        local width = height / 1.8
-                        local teamColor = p.TeamColor and p.TeamColor.Color or Color3.fromRGB(255, 255, 255)
-
-                        local corBox = Config.UseTeamColors and teamColor or Config.ESPBoxColor
-                        local corTexto = Config.UseTeamColors and teamColor or Config.ESPTextColor
-                        local trans = 1 - Config.ESPTransparency
-
-                        if Config.ESPBox then
-                            esp.Box.Size = Vector2.new(width, height)
-                            esp.Box.Position = Vector2.new(hrpPos.X - width / 2, hrpPos.Y - height / 2)
-                            esp.Box.Color = corBox
-                            esp.Box.Transparency = trans
-                            esp.Box.Visible = true
-                        else
-                            esp.Box.Visible = false
-                        end
-
-                        if Config.ESPName then
-                            esp.Name.Text = p.DisplayName
-                            esp.Name.Position = Vector2.new(hrpPos.X, hrpPos.Y - height / 2 - 16)
-                            esp.Name.Color = corTexto
-                            esp.Name.Transparency = trans
-                            esp.Name.Visible = true
-                        else
-                            esp.Name.Visible = false
-                        end
-
-                        if Config.ESPDistance then
-                            local playerChar = LocalPlayer.Character
-                            local playerHrp = playerChar and playerChar:FindFirstChild("HumanoidRootPart")
-                            local dist = playerHrp and math.floor((playerHrp.Position - hrp.Position).Magnitude) or 0
-                            esp.Distance.Text = dist .. "m"
-                            esp.Distance.Position = Vector2.new(hrpPos.X, hrpPos.Y + height / 2 + 2)
-                            esp.Distance.Color = corTexto
-                            esp.Distance.Transparency = trans
-                            esp.Distance.Visible = true
-                        else
-                            esp.Distance.Visible = false
-                        end
-
-                        if Config.ESPHealth then
-                            local hpPct = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
-                            local barH = height * hpPct
-                            
-                            esp.HealthBg.Size = Vector2.new(4, height)
-                            esp.HealthBg.Position = Vector2.new(hrpPos.X - width / 2 - 6, hrpPos.Y - height / 2)
-                            esp.HealthBg.Transparency = trans
-                            esp.HealthBg.Visible = true
-
-                            esp.HealthFg.Size = Vector2.new(2, barH)
-                            esp.HealthFg.Position = Vector2.new(hrpPos.X - width / 2 - 5, (hrpPos.Y + height / 2) - barH)
-                            esp.HealthFg.Color = Color3.fromRGB(255 * (1 - hpPct), 255 * hpPct, 0)
-                            esp.HealthFg.Transparency = trans
-                            esp.HealthFg.Visible = true
-                        else
-                            esp.HealthBg.Visible = false
-                            esp.HealthFg.Visible = false
-                        end
+                    if Config.ESPBox then
+                        esp.Box.Size = Vector2.new(width, height)
+                        esp.Box.Position = Vector2.new(hrpPos.X - width / 2, hrpPos.Y - height / 2)
+                        esp.Box.Color = corBox
+                        esp.Box.Transparency = trans
+                        esp.Box.Visible = true
                     else
                         esp.Box.Visible = false
+                    end
+
+                    if Config.ESPName then
+                        esp.Name.Text = p.DisplayName or "?"
+                        esp.Name.Position = Vector2.new(hrpPos.X, hrpPos.Y - height / 2 - 16)
+                        esp.Name.Color = corTexto
+                        esp.Name.Transparency = trans
+                        esp.Name.Visible = true
+                    else
                         esp.Name.Visible = false
+                    end
+
+                    if Config.ESPDistance then
+                        local playerChar = LocalPlayer.Character
+                        local playerHrp = playerChar and playerChar:FindFirstChild("HumanoidRootPart")
+                        local dist = playerHrp and math.floor((playerHrp.Position - hrp.Position).Magnitude) or 0
+                        esp.Distance.Text = dist .. "m"
+                        esp.Distance.Position = Vector2.new(hrpPos.X, hrpPos.Y + height / 2 + 2)
+                        esp.Distance.Color = corTexto
+                        esp.Distance.Transparency = trans
+                        esp.Distance.Visible = true
+                    else
                         esp.Distance.Visible = false
+                    end
+
+                    if Config.ESPHealth then
+                        local hpPct = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+                        local barH = height * hpPct
+                        
+                        esp.HealthBg.Size = Vector2.new(4, height)
+                        esp.HealthBg.Position = Vector2.new(hrpPos.X - width / 2 - 6, hrpPos.Y - height / 2)
+                        esp.HealthBg.Transparency = trans
+                        esp.HealthBg.Visible = true
+
+                        esp.HealthFg.Size = Vector2.new(2, barH)
+                        esp.HealthFg.Position = Vector2.new(hrpPos.X - width / 2 - 5, (hrpPos.Y + height / 2) - barH)
+                        esp.HealthFg.Color = Color3.fromRGB(255 * (1 - hpPct), 255 * hpPct, 0)
+                        esp.HealthFg.Transparency = trans
+                        esp.HealthFg.Visible = true
+                    else
                         esp.HealthBg.Visible = false
                         esp.HealthFg.Visible = false
                     end
@@ -1027,14 +1107,32 @@ RunService.RenderStepped:Connect(function()
                     esp.HealthFg.Visible = false
                 end
             else
-                if esp then
-                    esp.Box.Visible = false
-                    esp.Name.Visible = false
-                    esp.Distance.Visible = false
-                    esp.HealthBg.Visible = false
-                    esp.HealthFg.Visible = false
-                end
+                esp.Box.Visible = false
+                esp.Name.Visible = false
+                esp.Distance.Visible = false
+                esp.HealthBg.Visible = false
+                esp.HealthFg.Visible = false
             end
+        else
+            esp.Box.Visible = false
+            esp.Name.Visible = false
+            esp.Distance.Visible = false
+            esp.HealthBg.Visible = false
+            esp.HealthFg.Visible = false
         end
     end
-end)
+end
+
+renderConnection = RegisterConnection(RunService.RenderStepped:Connect(UpdateESP))
+
+------------------------------------------------------------------------
+-- CLEANUP SYSTEM
+------------------------------------------------------------------------
+RegisterConnection(game:GetService("RunService").Heartbeat:Connect(function()
+    if not MainFrame or not MainFrame.Parent then
+        CleanupConnections()
+        AddLog("Sistema limpo e finalizado")
+    end
+end))
+
+AddLog("✅ KAIDEV System v3 Otimizado - Totalmente Inicializado!")
